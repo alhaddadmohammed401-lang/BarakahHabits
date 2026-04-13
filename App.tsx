@@ -13,6 +13,7 @@ import AuthScreen from "./screens/AuthScreen";
 import HomeScreen from "./screens/HomeScreen";
 import ProfileScreen from "./screens/ProfileScreen";
 import QazaScreen from "./screens/QazaScreen";
+import BadgesScreen from "./screens/BadgesScreen";
 import PaywallScreen from "./screens/PaywallScreen";
 import OnboardingScreen from "./screens/OnboardingScreen";
 
@@ -63,6 +64,19 @@ function MainTabs({ session }: { session: Session }) {
         }}
       >
         {(props) => <QazaScreen {...props} session={session} />}
+      </Tab.Screen>
+
+      <Tab.Screen
+        name="Badges"
+        options={{
+          tabBarIcon: ({ focused }) => (
+            <Text style={[styles.tabIcon, focused && styles.tabIconActive]}>
+              🏆
+            </Text>
+          ),
+        }}
+      >
+        {(props) => <BadgesScreen {...props} session={session} />}
       </Tab.Screen>
 
       <Tab.Screen

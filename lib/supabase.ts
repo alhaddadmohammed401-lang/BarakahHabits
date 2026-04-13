@@ -21,6 +21,35 @@ export interface StreakResult {
   totalCompleted: number;
 }
 
+export interface BadgeProgress {
+  id: string;
+  emoji: string;
+  title: string;
+  condition: string;
+  unlocked: boolean;
+  unlockedDate: string | null;
+  progress: number;
+  progressText: string;
+}
+
+interface HabitCompletionRow {
+  habit_id: number;
+  completed_date: string;
+  created_at: string | null;
+}
+
+interface QazaPrayerRow {
+  count: number;
+  updated_at: string | null;
+}
+
+const HABITS_PER_DAY = 5;
+const HABIT_IDS = {
+  fajrOnTime: 1,
+  quranReading: 3,
+  ishaOnTime: 5,
+};
+
 /**
  * Returns "YYYY-MM-DD" for a Date object (local time).
  */
@@ -153,4 +182,337 @@ export async function calculateStreaks(userId: string): Promise<StreakResult> {
   }
 
   return result;
+}
+
+/**
+ * Keeps a number between 0 and 1 so progress bars never overflow.
+ */
+function clampProgress(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+/**
+ * Converts a count and target into a reusable progress percentage.
+ */
+function getProgress(current: number, target: number): number {
+  if (target <= 0) return 0;
+  return clampProgress(current / target);
+}
+
+/**
+ * Pulls a stable YYYY-MM-DD key from a Supabase date or timestamp.
+ */
+function getDateKey(value: string | null): string | null {
+  if (!value) return null;
+  return value.slice(0, 10);
+}
+
+/**
+ * Builds a date-to-habits map so full-day badges can be calculated.
+ */
+function buildDateHabitMap(
+  rows: HabitCompletionRow[]
+): Record<string, Set<number>> {
+  const dateHabitMap: Record<string, Set<number>> = {};
+
+  rows.forEach((row) => {
+    const dateKey = getDateKey(row.completed_date);
+    if (!dateKey) return;
+
+    if (!dateHabitMap[dateKey]) {
+      dateHabitMap[dateKey] = new Set<number>();
+    }
+
+    dateHabitMap[dateKey].add(row.habit_id);
+  });
+
+  return dateHabitMap;
+}
+
+/**
+ * Returns sorted dates where the user completed every daily habit.
+ */
+function getFullDayDates(dateHabitMap: Record<string, Set<number>>): string[] {
+  return Object.keys(dateHabitMap)
+    .filter((dateKey) => dateHabitMap[dateKey].size >= HABITS_PER_DAY)
+    .sort();
+}
+
+/**
+ * Returns sorted unique dates where one specific habit was completed.
+ */
+function getHabitDates(rows: HabitCompletionRow[], habitId: number): string[] {
+  const dates = new Set<string>();
+
+  rows.forEach((row) => {
+    const dateKey = getDateKey(row.completed_date);
+    if (row.habit_id === habitId && dateKey) {
+      dates.add(dateKey);
+    }
+  });
+
+  return Array.from(dates).sort();
+}
+
+/**
+ * Finds the longest consecutive run in a sorted list of YYYY-MM-DD dates.
+ */
+function getLongestStreak(dates: string[]): number {
+  if (dates.length === 0) return 0;
+
+  let currentRun = 1;
+  let bestRun = 1;
+
+  for (let i = 1; i < dates.length; i++) {
+    const expectedPreviousDate = addDays(dates[i], -1);
+
+    if (expectedPreviousDate === dates[i - 1]) {
+      currentRun++;
+      bestRun = Math.max(bestRun, currentRun);
+    } else {
+      currentRun = 1;
+    }
+  }
+
+  return bestRun;
+}
+
+/**
+ * Returns the date when a streak target was first reached.
+ */
+function getFirstStreakUnlockDate(
+  dates: string[],
+  target: number
+): string | null {
+  if (dates.length === 0 || target <= 0) return null;
+  if (target === 1) return dates[0];
+
+  let currentRun = 1;
+
+  for (let i = 1; i < dates.length; i++) {
+    const expectedPreviousDate = addDays(dates[i], -1);
+
+    if (expectedPreviousDate === dates[i - 1]) {
+      currentRun++;
+    } else {
+      currentRun = 1;
+    }
+
+    if (currentRun >= target) {
+      return dates[i];
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Finds the best single-day completion count for first-step progress.
+ */
+function getBestSingleDayCompletionCount(
+  dateHabitMap: Record<string, Set<number>>
+): number {
+  return Object.values(dateHabitMap).reduce(
+    (bestCount, habitSet) => Math.max(bestCount, habitSet.size),
+    0
+  );
+}
+
+/**
+ * Finds the date when the total completion target was first reached.
+ */
+function getTotalCompletionUnlockDate(
+  rows: HabitCompletionRow[],
+  target: number
+): string | null {
+  if (rows.length < target) return null;
+
+  const sortedRows = [...rows].sort((firstRow, secondRow) => {
+    const firstDate = firstRow.created_at ?? firstRow.completed_date;
+    const secondDate = secondRow.created_at ?? secondRow.completed_date;
+    return firstDate.localeCompare(secondDate);
+  });
+
+  const targetRow = sortedRows[target - 1];
+  return getDateKey(targetRow.created_at ?? targetRow.completed_date);
+}
+
+/**
+ * Finds the latest Qaza update date for the Qaza Free badge.
+ */
+function getQazaFreeUnlockDate(rows: QazaPrayerRow[]): string {
+  if (rows.length === 0) return getTodayKey();
+
+  const sortedDates = rows
+    .map((row) => getDateKey(row.updated_at))
+    .filter((dateKey): dateKey is string => Boolean(dateKey))
+    .sort();
+
+  return sortedDates[sortedDates.length - 1] ?? getTodayKey();
+}
+
+/**
+ * Builds one badge object with consistent unlock and progress fields.
+ */
+function createBadge(params: {
+  id: string;
+  emoji: string;
+  title: string;
+  condition: string;
+  unlockDate: string | null;
+  progressValue: number;
+  progressText: string;
+}): BadgeProgress {
+  const unlocked = Boolean(params.unlockDate);
+
+  return {
+    id: params.id,
+    emoji: params.emoji,
+    title: params.title,
+    condition: params.condition,
+    unlocked,
+    unlockedDate: params.unlockDate,
+    progress: unlocked ? 1 : params.progressValue,
+    progressText: unlocked ? "Unlocked" : params.progressText,
+  };
+}
+
+/**
+ * Loads habit and Qaza data from Supabase, then calculates every badge.
+ */
+export async function getBadgeProgress(userId: string): Promise<BadgeProgress[]> {
+  const { data: completionData, error: completionError } = await supabase
+    .from("habit_completions")
+    .select("habit_id, completed_date, created_at")
+    .eq("user_id", userId);
+
+  if (completionError) {
+    throw new Error(`Could not load habit completions: ${completionError.message}`);
+  }
+
+  const { data: qazaData, error: qazaError } = await supabase
+    .from("qaza_prayers")
+    .select("count, updated_at")
+    .eq("user_id", userId);
+
+  if (qazaError) {
+    throw new Error(`Could not load Qaza prayers: ${qazaError.message}`);
+  }
+
+  const habitRows = (completionData ?? []) as HabitCompletionRow[];
+  const qazaRows = (qazaData ?? []) as QazaPrayerRow[];
+
+  const dateHabitMap = buildDateHabitMap(habitRows);
+  const fullDayDates = getFullDayDates(dateHabitMap);
+  const fajrDates = getHabitDates(habitRows, HABIT_IDS.fajrOnTime);
+  const quranDates = getHabitDates(habitRows, HABIT_IDS.quranReading);
+  const ishaDates = getHabitDates(habitRows, HABIT_IDS.ishaOnTime);
+
+  const bestFullDayStreak = getLongestStreak(fullDayDates);
+  const bestFajrStreak = getLongestStreak(fajrDates);
+  const bestQuranStreak = getLongestStreak(quranDates);
+  const bestIshaStreak = getLongestStreak(ishaDates);
+  const bestSingleDayCount = getBestSingleDayCompletionCount(dateHabitMap);
+  const totalCompleted = habitRows.length;
+  const totalQazaOwed = qazaRows.reduce(
+    (totalCount, row) => totalCount + row.count,
+    0
+  );
+
+  const firstStepUnlockDate = fullDayDates[0] ?? null;
+  const qazaUnlockDate =
+    totalQazaOwed === 0 ? getQazaFreeUnlockDate(qazaRows) : null;
+
+  return [
+    createBadge({
+      id: "early-bird",
+      emoji: "🌅",
+      title: "Early Bird",
+      condition: "Complete Fajr on time 7 days in a row",
+      unlockDate: getFirstStreakUnlockDate(fajrDates, 7),
+      progressValue: getProgress(bestFajrStreak, 7),
+      progressText: `${Math.min(bestFajrStreak, 7)}/7 days`,
+    }),
+    createBadge({
+      id: "on-fire",
+      emoji: "🔥",
+      title: "On Fire",
+      condition: "Reach a 7 day streak",
+      unlockDate: getFirstStreakUnlockDate(fullDayDates, 7),
+      progressValue: getProgress(bestFullDayStreak, 7),
+      progressText: `${Math.min(bestFullDayStreak, 7)}/7 days`,
+    }),
+    createBadge({
+      id: "unstoppable",
+      emoji: "⚡",
+      title: "Unstoppable",
+      condition: "Reach a 30 day streak",
+      unlockDate: getFirstStreakUnlockDate(fullDayDates, 30),
+      progressValue: getProgress(bestFullDayStreak, 30),
+      progressText: `${Math.min(bestFullDayStreak, 30)}/30 days`,
+    }),
+    createBadge({
+      id: "diamond-deen",
+      emoji: "💎",
+      title: "Diamond Deen",
+      condition: "Reach a 100 day streak",
+      unlockDate: getFirstStreakUnlockDate(fullDayDates, 100),
+      progressValue: getProgress(bestFullDayStreak, 100),
+      progressText: `${Math.min(bestFullDayStreak, 100)}/100 days`,
+    }),
+    createBadge({
+      id: "first-step",
+      emoji: "✅",
+      title: "First Step",
+      condition: "Complete all 5 habits for the first time",
+      unlockDate: firstStepUnlockDate,
+      progressValue: getProgress(bestSingleDayCount, HABITS_PER_DAY),
+      progressText: `${Math.min(bestSingleDayCount, HABITS_PER_DAY)}/5 habits`,
+    }),
+    createBadge({
+      id: "night-warrior",
+      emoji: "🌙",
+      title: "Night Warrior",
+      condition: "Complete Isha on time 30 days in a row",
+      unlockDate: getFirstStreakUnlockDate(ishaDates, 30),
+      progressValue: getProgress(bestIshaStreak, 30),
+      progressText: `${Math.min(bestIshaStreak, 30)}/30 days`,
+    }),
+    createBadge({
+      id: "quran-keeper",
+      emoji: "📖",
+      title: "Quran Keeper",
+      condition: "Complete Quran Reading 30 days in a row",
+      unlockDate: getFirstStreakUnlockDate(quranDates, 30),
+      progressValue: getProgress(bestQuranStreak, 30),
+      progressText: `${Math.min(bestQuranStreak, 30)}/30 days`,
+    }),
+    createBadge({
+      id: "century",
+      emoji: "🏆",
+      title: "Century",
+      condition: "Complete 100 total habits",
+      unlockDate: getTotalCompletionUnlockDate(habitRows, 100),
+      progressValue: getProgress(totalCompleted, 100),
+      progressText: `${Math.min(totalCompleted, 100)}/100 habits`,
+    }),
+    createBadge({
+      id: "elite",
+      emoji: "👑",
+      title: "Elite",
+      condition: "Complete 500 total habits",
+      unlockDate: getTotalCompletionUnlockDate(habitRows, 500),
+      progressValue: getProgress(totalCompleted, 500),
+      progressText: `${Math.min(totalCompleted, 500)}/500 habits`,
+    }),
+    createBadge({
+      id: "qaza-free",
+      emoji: "🕌",
+      title: "Qaza Free",
+      condition: "Bring all Qaza counts to 0",
+      unlockDate: qazaUnlockDate,
+      progressValue: totalQazaOwed === 0 ? 1 : 0,
+      progressText: `${totalQazaOwed} qaza left`,
+    }),
+  ];
 }
