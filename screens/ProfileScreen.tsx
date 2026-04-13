@@ -12,6 +12,8 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Session } from "@supabase/supabase-js";
 import { supabase, calculateStreaks, StreakResult } from "../lib/supabase";
+import { useRevenueCat } from "../hooks/useRevenueCat";
+import RevenueCatUI from "react-native-purchases-ui";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface Props {
@@ -23,6 +25,7 @@ interface Props {
 export default function ProfileScreen({ session, navigation }: Props) {
   const userId = session?.user?.id;
   const userEmail = session?.user?.email ?? "Unknown";
+  const { isPremium } = useRevenueCat();
 
   const [stats, setStats] = useState<StreakResult>({
     currentStreak: 0,
@@ -84,12 +87,14 @@ export default function ProfileScreen({ session, navigation }: Props) {
         {/* ── Header ──────────────────────────────────────── */}
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Profile</Text>
-          <TouchableOpacity 
-            style={styles.premiumButton}
-            onPress={() => navigation.navigate("Paywall")}
-          >
-            <Text style={styles.premiumIcon}>👑</Text>
-          </TouchableOpacity>
+          {!isPremium && (
+            <TouchableOpacity 
+              style={styles.premiumButton}
+              onPress={() => navigation.navigate("Paywall")}
+            >
+              <Text style={styles.premiumIcon}>👑</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* ── Avatar & Email ──────────────────────────────── */}
@@ -156,14 +161,24 @@ export default function ProfileScreen({ session, navigation }: Props) {
           <Text style={styles.quoteSource}>— Prophet Muhammad ﷺ</Text>
         </View>
 
-        {/* ── Go Premium Button ───────────────────────────── */}
-        <TouchableOpacity
-          style={styles.premiumBigButton}
-          onPress={() => navigation.navigate("Paywall")}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.premiumBigText}>Go Premium 👑</Text>
-        </TouchableOpacity>
+        {/* ── Go Premium / Manage Sub ─────────────────────── */}
+        {!isPremium ? (
+          <TouchableOpacity
+            style={styles.premiumBigButton}
+            onPress={() => navigation.navigate("Paywall")}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.premiumBigText}>Go Premium 👑</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={styles.premiumBigButton}
+            onPress={() => RevenueCatUI.presentCustomerCenter()}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.premiumBigText}>Manage Subscription ⚙️</Text>
+          </TouchableOpacity>
+        )}
 
         {/* ── Logout Button ───────────────────────────────── */}
         <TouchableOpacity
