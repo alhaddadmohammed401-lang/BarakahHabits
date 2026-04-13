@@ -3,12 +3,15 @@ import { Text, StyleSheet } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Session } from "@supabase/supabase-js";
 import { supabase } from "./lib/supabase";
+import { useNotifications } from "./hooks/useNotifications";
 
 import AuthScreen from "./screens/AuthScreen";
 import HomeScreen from "./screens/HomeScreen";
 import ProfileScreen from "./screens/ProfileScreen";
+import PaywallScreen from "./screens/PaywallScreen";
 
 // ── Tab Navigator ────────────────────────────────────────────────────────────
 const Tab = createBottomTabNavigator();
@@ -43,7 +46,7 @@ function MainTabs({ session }: { session: Session }) {
           ),
         }}
       >
-        {() => <HomeScreen session={session} />}
+        {(props) => <HomeScreen {...props} session={session} />}
       </Tab.Screen>
 
       <Tab.Screen
@@ -56,16 +59,41 @@ function MainTabs({ session }: { session: Session }) {
           ),
         }}
       >
-        {() => <ProfileScreen session={session} />}
+        {(props) => <ProfileScreen {...props} session={session} />}
       </Tab.Screen>
     </Tab.Navigator>
   );
 }
 
+// ── Main Stack (Wraps Tabs + Modals) ─────────────────────────────────────────
+const Stack = createNativeStackNavigator();
+
+function MainStack({ session }: { session: Session }) {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="MainTabs">
+        {() => <MainTabs session={session} />}
+      </Stack.Screen>
+      <Stack.Screen 
+        name="Paywall" 
+        component={PaywallScreen} 
+        options={{ presentation: "modal" }}
+      />
+    </Stack.Navigator>
+  );
+}
+
+console.log("=== APP.TSX MODULE LOADED ===");
+
 // ── App Root ─────────────────────────────────────────────────────────────────
 export default function App() {
+  console.log("APP LOADED");
+
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+
+  // Schedule prayer time notifications daily
+  useNotifications();
 
   useEffect(() => {
     // Check existing session on mount
@@ -90,7 +118,7 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <NavigationContainer>
-        {session ? <MainTabs session={session} /> : <AuthScreen />}
+        {session ? <MainStack session={session} /> : <AuthScreen />}
       </NavigationContainer>
     </SafeAreaProvider>
   );

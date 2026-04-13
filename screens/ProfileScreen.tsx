@@ -11,32 +11,20 @@ import {
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Session } from "@supabase/supabase-js";
-import { supabase } from "../lib/supabase";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { supabase, calculateStreaks, StreakResult } from "../lib/supabase";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface Props {
   session: Session;
+  navigation: any;
 }
-
-interface Stats {
-  currentStreak: number;
-  bestStreak: number;
-  totalCompleted: number;
-}
-
-// ── Storage Keys ─────────────────────────────────────────────────────────────
-const STORAGE_KEYS = {
-  STREAK: "barakah_streak",
-  BEST_STREAK: "barakah_best_streak",
-};
 
 // ── Component ────────────────────────────────────────────────────────────────
-export default function ProfileScreen({ session }: Props) {
+export default function ProfileScreen({ session, navigation }: Props) {
   const userId = session?.user?.id;
   const userEmail = session?.user?.email ?? "Unknown";
 
-  const [stats, setStats] = useState<Stats>({
+  const [stats, setStats] = useState<StreakResult>({
     currentStreak: 0,
     bestStreak: 0,
     totalCompleted: 0,
@@ -48,103 +36,21 @@ export default function ProfileScreen({ session }: Props) {
     let cancelled = false;
 
     async function loadStats() {
-      let currentStreak = 0;
-      let bestStreak = 0;
-      let totalCompleted = 0;
-
-      // 1) Load current streak from AsyncStorage
-      try {
-        const saved = await AsyncStorage.getItem(STORAGE_KEYS.STREAK);
-        if (saved) currentStreak = parseInt(saved, 10) || 0;
-
-        const savedBest = await AsyncStorage.getItem(STORAGE_KEYS.BEST_STREAK);
-        if (savedBest) bestStreak = parseInt(savedBest, 10) || 0;
-
-        // Update best streak if current exceeds it
-        if (currentStreak > bestStreak) {
-          bestStreak = currentStreak;
-          AsyncStorage.setItem(
-            STORAGE_KEYS.BEST_STREAK,
-            String(bestStreak)
-          ).catch(() => {});
-        }
-      } catch {
-        // ignore
-      }
-
-      // 2) Load total completed from Supabase
-      try {
-        const { count, error } = await supabase
-          .from("habit_completions")
-          .select("*", { count: "exact", head: true })
-          .eq("user_id", userId);
-
-        if (!error && count !== null) {
-          totalCompleted = count;
-        }
-      } catch {
-        // Supabase unavailable — show 0
-      }
-
-      if (cancelled) return;
-
-      // 3) Calculate best streak from Supabase completion dates
-      try {
-        const { data, error } = await supabase
-          .from("habit_completions")
-          .select("completed_date")
-          .eq("user_id", userId)
-          .order("completed_date", { ascending: true });
-
-        if (!error && data && data.length > 0) {
-          // Get unique dates where all 5 habits were completed
-          const dateCount: Record<string, number> = {};
-          data.forEach((row: { completed_date: string }) => {
-            dateCount[row.completed_date] =
-              (dateCount[row.completed_date] || 0) + 1;
-          });
-
-          // Filter to dates with all 5 habits done
-          const fullDays = Object.keys(dateCount)
-            .filter((d) => dateCount[d] >= 5)
-            .sort();
-
-          // Calculate longest consecutive streak
-          if (fullDays.length > 0) {
-            let streak = 1;
-            let maxStreak = 1;
-
-            for (let i = 1; i < fullDays.length; i++) {
-              const prev = new Date(fullDays[i - 1]);
-              const curr = new Date(fullDays[i]);
-              const diffMs = curr.getTime() - prev.getTime();
-              const diffDays = diffMs / (1000 * 60 * 60 * 24);
-
-              if (diffDays === 1) {
-                streak++;
-                if (streak > maxStreak) maxStreak = streak;
-              } else {
-                streak = 1;
-              }
-            }
-
-            if (maxStreak > bestStreak) {
-              bestStreak = maxStreak;
-              AsyncStorage.setItem(
-                STORAGE_KEYS.BEST_STREAK,
-                String(bestStreak)
-              ).catch(() => {});
-            }
-          }
-        }
-      } catch {
-        // ignore
-      }
-
-      if (!cancelled) {
-        setStats({ currentStreak, bestStreak, totalCompleted });
+      if (!userId) {
         setLoading(false);
+        return;
       }
+
+      try {
+        const result = await calculateStreaks(userId);
+        if (!cancelled) {
+          setStats(result);
+        }
+      } catch {
+        // Supabase unavailable — stats stay at 0
+      }
+
+      if (!cancelled) setLoading(false);
     }
 
     loadStats();
@@ -178,6 +84,12 @@ export default function ProfileScreen({ session }: Props) {
         {/* ── Header ──────────────────────────────────────── */}
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Profile</Text>
+          <TouchableOpacity 
+            style={styles.premiumButton}
+            onPress={() => navigation.navigate("Paywall")}
+          >
+            <Text style={styles.premiumIcon}>👑</Text>
+          </TouchableOpacity>
         </View>
 
         {/* ── Avatar & Email ──────────────────────────────── */}
@@ -214,6 +126,7 @@ export default function ProfileScreen({ session }: Props) {
             <View style={styles.statCard}>
               <Text style={styles.statEmoji}>🔥</Text>
               <Text style={styles.statNumber}>{stats.currentStreak}</Text>
+              <Text style={styles.statUnit}>days</Text>
               <Text style={styles.statLabel}>Current Streak</Text>
             </View>
 
@@ -221,6 +134,7 @@ export default function ProfileScreen({ session }: Props) {
             <View style={styles.statCard}>
               <Text style={styles.statEmoji}>🏆</Text>
               <Text style={styles.statNumber}>{stats.bestStreak}</Text>
+              <Text style={styles.statUnit}>days</Text>
               <Text style={styles.statLabel}>Best Streak</Text>
             </View>
 
@@ -241,6 +155,15 @@ export default function ProfileScreen({ session }: Props) {
           </Text>
           <Text style={styles.quoteSource}>— Prophet Muhammad ﷺ</Text>
         </View>
+
+        {/* ── Go Premium Button ───────────────────────────── */}
+        <TouchableOpacity
+          style={styles.premiumBigButton}
+          onPress={() => navigation.navigate("Paywall")}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.premiumBigText}>Go Premium 👑</Text>
+        </TouchableOpacity>
 
         {/* ── Logout Button ───────────────────────────────── */}
         <TouchableOpacity
@@ -279,6 +202,9 @@ const styles = StyleSheet.create({
 
   // ── Header ──────────────────────
   header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     marginTop: 20,
     marginBottom: 24,
   },
@@ -287,6 +213,19 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: COLORS.gold,
     letterSpacing: 0.5,
+  },
+  premiumButton: {
+    backgroundColor: COLORS.cardBg,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: COLORS.goldLight,
+  },
+  premiumIcon: {
+    fontSize: 22,
   },
 
   // ── Profile Card ────────────────
@@ -375,6 +314,13 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: COLORS.gold,
   },
+  statUnit: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: COLORS.gold,
+    opacity: 0.7,
+    marginTop: -2,
+  },
   statLabel: {
     fontSize: 12,
     fontWeight: "600",
@@ -405,6 +351,23 @@ const styles = StyleSheet.create({
     color: COLORS.gold,
     fontWeight: "600",
     textAlign: "right",
+  },
+
+  // ── Premium Link ────────────────
+  premiumBigButton: {
+    backgroundColor: COLORS.goldLight,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: COLORS.gold,
+    paddingVertical: 16,
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  premiumBigText: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: COLORS.gold,
+    letterSpacing: 0.3,
   },
 
   // ── Logout ──────────────────────
