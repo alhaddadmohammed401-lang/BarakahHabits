@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Text, StyleSheet } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NavigationContainer } from "@react-navigation/native";
@@ -12,6 +13,7 @@ import AuthScreen from "./screens/AuthScreen";
 import HomeScreen from "./screens/HomeScreen";
 import ProfileScreen from "./screens/ProfileScreen";
 import PaywallScreen from "./screens/PaywallScreen";
+import OnboardingScreen from "./screens/OnboardingScreen";
 
 // ── Tab Navigator ────────────────────────────────────────────────────────────
 const Tab = createBottomTabNavigator();
@@ -91,11 +93,17 @@ export default function App() {
 
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  const [showOnboarding, setShowOnboarding] = useState<boolean | null>(null);
 
   // Schedule prayer time notifications daily
   useNotifications();
 
   useEffect(() => {
+    // Check onboarding status
+    AsyncStorage.getItem("barakah_has_completed_onboarding").then((val) => {
+      setShowOnboarding(val !== "true");
+    });
+
     // Check existing session on mount
     supabase.auth.getSession().then(({ data: { session: s } }) => {
       setSession(s);
@@ -112,13 +120,19 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Don't render anything until we know the auth state
-  if (loading) return null;
+  // Don't render anything until we know the auth state and onboarding status
+  if (loading || showOnboarding === null) return null;
 
   return (
     <SafeAreaProvider>
       <NavigationContainer>
-        {session ? <MainStack session={session} /> : <AuthScreen />}
+        {showOnboarding ? (
+          <OnboardingScreen onComplete={() => setShowOnboarding(false)} />
+        ) : session ? (
+          <MainStack session={session} />
+        ) : (
+          <AuthScreen />
+        )}
       </NavigationContainer>
     </SafeAreaProvider>
   );
