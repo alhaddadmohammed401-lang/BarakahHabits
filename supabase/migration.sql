@@ -36,3 +36,37 @@ CREATE POLICY "Users can insert own completions"
 CREATE POLICY "Users can delete own completions"
   ON habit_completions FOR DELETE
   USING (auth.uid() = user_id);
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+--  Qaza (Missed) Prayers Tracking
+--  Table to track missed prayers per user
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+-- 7. Create the Qaza prayers table
+CREATE TABLE IF NOT EXISTS qaza_prayers (
+  id              uuid        DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id         uuid        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  prayer_name     text        NOT NULL,
+  count           integer     NOT NULL DEFAULT 0,
+  updated_at      timestamptz NOT NULL DEFAULT now(),
+
+  -- Prevent tracking the same prayer multi-times per user, use count to tally
+  UNIQUE (user_id, prayer_name)
+);
+
+-- 8. Enable Row Level Security
+ALTER TABLE qaza_prayers ENABLE ROW LEVEL SECURITY;
+
+-- 9. Policies for Qaza Prayers
+CREATE POLICY "Users can view own qaza prayers"
+  ON qaza_prayers FOR SELECT
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert own qaza prayers"
+  ON qaza_prayers FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update own qaza prayers"
+  ON qaza_prayers FOR UPDATE
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
