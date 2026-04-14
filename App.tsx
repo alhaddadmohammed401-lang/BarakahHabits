@@ -16,6 +16,7 @@ import QazaScreen from "./screens/QazaScreen";
 import BadgesScreen from "./screens/BadgesScreen";
 import PaywallScreen from "./screens/PaywallScreen";
 import OnboardingScreen from "./screens/OnboardingScreen";
+import HabitHistoryScreen from "./screens/HabitHistoryScreen";
 
 // ── Tab Navigator ────────────────────────────────────────────────────────────
 const Tab = createBottomTabNavigator();
@@ -103,6 +104,9 @@ function MainStack({ session }: { session: Session }) {
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="MainTabs">
         {() => <MainTabs session={session} />}
+      </Stack.Screen>
+      <Stack.Screen name="HabitHistory">
+        {(props) => <HabitHistoryScreen {...props} session={session} />}
       </Stack.Screen>
       <Stack.Screen 
         name="Paywall" 

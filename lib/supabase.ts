@@ -583,3 +583,44 @@ export async function getHabitCompletionHeatmap(
     completionCount: completionsByDate[date]?.size ?? 0,
   }));
 }
+
+/**
+ * Loads habit completion data for a specific date range, typically a month.
+ * Returns a mapping from YYYY-MM-DD to the number of uniquely completed habits.
+ */
+export async function getMonthlyHabitCompletions(
+  userId: string,
+  startDate: string,
+  endDate: string
+): Promise<Record<string, number>> {
+  const { data, error } = await supabase
+    .from("habit_completions")
+    .select("habit_id, completed_date")
+    .eq("user_id", userId)
+    .gte("completed_date", startDate)
+    .lte("completed_date", endDate);
+
+  if (error) {
+    throw new Error(`Could not load monthly habit data: ${error.message}`);
+  }
+
+  const completionsByDate: Record<string, Set<number>> = {};
+  const rows = (data ?? []) as HabitHeatmapRow[];
+
+  rows.forEach((row) => {
+    const dateKey = getDateKey(row.completed_date);
+    if (!dateKey) return;
+
+    if (!completionsByDate[dateKey]) {
+      completionsByDate[dateKey] = new Set<number>();
+    }
+    completionsByDate[dateKey].add(row.habit_id);
+  });
+
+  const finalCounts: Record<string, number> = {};
+  Object.keys(completionsByDate).forEach((key) => {
+    finalCounts[key] = completionsByDate[key].size;
+  });
+
+  return finalCounts;
+}

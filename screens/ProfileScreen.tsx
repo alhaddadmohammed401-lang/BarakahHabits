@@ -361,6 +361,17 @@ export default function ProfileScreen({ session, navigation }: Props) {
           )}
         </View>
 
+        {/* ── Full History Button ─────────────────────────── */}
+        <TouchableOpacity
+          className="bg-white/10 rounded-[14px] border border-white/10 py-4 items-center mb-6"
+          onPress={() => navigation.navigate("HabitHistory")}
+          activeOpacity={0.8}
+        >
+          <Text className="text-base font-semibold text-white tracking-wider">
+            View History 📅
+          </Text>
+        </TouchableOpacity>
+
         <View style={styles.quoteCard}>
           <Text style={styles.quoteText}>
             "The most beloved deeds to Allah are the most consistent, even if
@@ -694,6 +705,8 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     textAlign: "right",
   },
+
+
 
   // ── Premium Link ────────────────
   premiumBigButton: {
