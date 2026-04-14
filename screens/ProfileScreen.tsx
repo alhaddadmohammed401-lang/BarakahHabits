@@ -363,13 +363,11 @@ export default function ProfileScreen({ session, navigation }: Props) {
 
         {/* ── Full History Button ─────────────────────────── */}
         <TouchableOpacity
-          className="bg-white/10 rounded-[14px] border border-white/10 py-4 items-center mb-6"
+          style={styles.historyBigButton}
           onPress={() => navigation.navigate("HabitHistory")}
           activeOpacity={0.8}
         >
-          <Text className="text-base font-semibold text-white tracking-wider">
-            View History 📅
-          </Text>
+          <Text style={styles.historyBigText}>View Full History 📅</Text>
         </TouchableOpacity>
 
         <View style={styles.quoteCard}>
@@ -704,6 +702,23 @@ const styles = StyleSheet.create({
     color: COLORS.gold,
     fontWeight: "600",
     textAlign: "right",
+  },
+
+  // ── History Button ──────────────
+  historyBigButton: {
+    backgroundColor: COLORS.cardBg,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: COLORS.cardBorder,
+    paddingVertical: 16,
+    alignItems: "center",
+    marginBottom: 24,
+  },
+  historyBigText: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: COLORS.white,
+    letterSpacing: 0.3,
   },
 
 

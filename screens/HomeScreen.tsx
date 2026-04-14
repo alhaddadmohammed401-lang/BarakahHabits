@@ -13,6 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Session } from "@supabase/supabase-js";
 import { supabase, calculateStreaks, getTodayKey } from "../lib/supabase";
+import { checkMilestoneNotification } from "../hooks/useNotifications";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface Habit {
@@ -46,7 +47,7 @@ const HAID_HABITS_CACHE_KEY = "barakah_haid_habits";
 // ── Haid Mode Alternative Habits ─────────────────────────────────────────────
 const HAID_HABITS: Habit[] = [
   { id: 101, label: "Morning Dhikr", emoji: "🤲", completed: false },
-  { id: 102, label: "Evening Dua", emoji: "🌙", completed: false },
+  { id: 102, label: "Evening Dua", emoji: "📿", completed: false },
   { id: 103, label: "Quran Listening", emoji: "🎧", completed: false },
 ];
 
@@ -283,12 +284,12 @@ export default function HomeScreen({ session }: Props) {
   // ── Activate haid exemption mode (pauses streak tracking) ──────────────
   function activateHaidMode() {
     Alert.alert(
-      "Pause Streak",
-      "Your streak will be safely preserved. You'll see alternative spiritual practices to continue your journey.",
+      "Pause your streak?",
+      "Your streak will be preserved. Your daily goals will shift to Dhikr and Dua during this time.",
       [
         { text: "Cancel", style: "cancel" },
         {
-          text: "Pause",
+          text: "Yes, pause",
           onPress: async () => {
             const today = getTodayKey();
 
@@ -391,6 +392,16 @@ export default function HomeScreen({ session }: Props) {
       // Recalculate streak from Supabase (the new completion is already saved)
       await refreshStreak();
 
+      // Check if user hit a streak milestone and send notification
+      if (userId) {
+        try {
+          const streakResult = await calculateStreaks(userId);
+          await checkMilestoneNotification(streakResult.currentStreak);
+        } catch {
+          // Milestone check is best-effort
+        }
+      }
+
       setTimeout(() => {
         Alert.alert(
           "MashaAllah! 🎉",
@@ -431,7 +442,7 @@ export default function HomeScreen({ session }: Props) {
         {haidModeActive && (
           <View style={styles.haidBanner}>
             <Text style={styles.haidBannerText}>
-              Streak paused — Focus on Dhikr and Dua 🤲
+              🤲 Streak paused — Focus on Dhikr and Dua
             </Text>
           </View>
         )}

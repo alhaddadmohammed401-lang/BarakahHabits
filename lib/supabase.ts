@@ -624,3 +624,138 @@ export async function getMonthlyHabitCompletions(
 
   return finalCounts;
 }
+
+// ── Accountability Buddy Helpers ─────────────────────────────────────────────
+
+export interface BuddyConnection {
+  id: string;
+  requester_id: string;
+  buddy_id: string;
+  status: "pending" | "accepted";
+  created_at: string;
+}
+
+/**
+ * Sends a buddy invitation by looking up the target user's email.
+ * Creates a row in buddy_connections with status = 'pending'.
+ */
+export async function sendBuddyInvite(
+  requesterId: string,
+  buddyEmail: string
+): Promise<{ success: boolean; error?: string }> {
+  // Look up the buddy's user ID by email via a Supabase RPC or profiles table
+  const { data: profileData, error: profileError } = await supabase
+    .from("profiles")
+    .select("id")
+    .eq("email", buddyEmail.toLowerCase().trim())
+    .single();
+
+  if (profileError || !profileData) {
+    return { success: false, error: "User not found. Make sure they have a Barakah Habits account." };
+  }
+
+  const buddyId = profileData.id;
+
+  if (buddyId === requesterId) {
+    return { success: false, error: "You cannot invite yourself." };
+  }
+
+  // Check if a connection already exists
+  const { data: existing } = await supabase
+    .from("buddy_connections")
+    .select("id")
+    .or(
+      `and(requester_id.eq.${requesterId},buddy_id.eq.${buddyId}),and(requester_id.eq.${buddyId},buddy_id.eq.${requesterId})`
+    )
+    .limit(1);
+
+  if (existing && existing.length > 0) {
+    return { success: false, error: "A connection with this user already exists." };
+  }
+
+  const { error: insertError } = await supabase
+    .from("buddy_connections")
+    .insert({
+      requester_id: requesterId,
+      buddy_id: buddyId,
+      status: "pending",
+    });
+
+  if (insertError) {
+    return { success: false, error: insertError.message };
+  }
+
+  return { success: true };
+}
+
+/**
+ * Gets the current user's active buddy connection (accepted or pending).
+ * Returns the connection row plus the buddy's email for display.
+ */
+export async function getBuddyConnection(
+  userId: string
+): Promise<{ connection: BuddyConnection | null; buddyEmail: string | null; isPending: boolean }> {
+  // Find connections where user is requester or buddy
+  const { data, error } = await supabase
+    .from("buddy_connections")
+    .select("*")
+    .or(`requester_id.eq.${userId},buddy_id.eq.${userId}`)
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (error || !data || data.length === 0) {
+    return { connection: null, buddyEmail: null, isPending: false };
+  }
+
+  const conn = data[0] as BuddyConnection;
+  const buddyId = conn.requester_id === userId ? conn.buddy_id : conn.requester_id;
+
+  // Get buddy email
+  const { data: profileData } = await supabase
+    .from("profiles")
+    .select("email")
+    .eq("id", buddyId)
+    .single();
+
+  return {
+    connection: conn,
+    buddyEmail: profileData?.email ?? null,
+    isPending: conn.status === "pending",
+  };
+}
+
+/**
+ * Accepts a pending buddy invitation where the current user is the buddy.
+ */
+export async function acceptBuddyInvite(connectionId: string): Promise<boolean> {
+  const { error } = await supabase
+    .from("buddy_connections")
+    .update({ status: "accepted" })
+    .eq("id", connectionId);
+
+  return !error;
+}
+
+/**
+ * Removes a buddy connection entirely.
+ */
+export async function removeBuddy(connectionId: string): Promise<boolean> {
+  const { error } = await supabase
+    .from("buddy_connections")
+    .delete()
+    .eq("id", connectionId);
+
+  return !error;
+}
+
+/**
+ * Gets a user's current streak for display on the buddy screen.
+ */
+export async function getBuddyStreak(userId: string): Promise<number> {
+  try {
+    const result = await calculateStreaks(userId);
+    return result.currentStreak;
+  } catch {
+    return 0;
+  }
+}

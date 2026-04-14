@@ -1,3 +1,4 @@
+import "./global.css";
 import React, { useState, useEffect } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Text, StyleSheet } from "react-native";
@@ -17,6 +18,7 @@ import BadgesScreen from "./screens/BadgesScreen";
 import PaywallScreen from "./screens/PaywallScreen";
 import OnboardingScreen from "./screens/OnboardingScreen";
 import HabitHistoryScreen from "./screens/HabitHistoryScreen";
+import BuddyScreen from "./screens/BuddyScreen";
 
 // ── Tab Navigator ────────────────────────────────────────────────────────────
 const Tab = createBottomTabNavigator();
@@ -78,6 +80,19 @@ function MainTabs({ session }: { session: Session }) {
         }}
       >
         {(props) => <BadgesScreen {...props} session={session} />}
+      </Tab.Screen>
+
+      <Tab.Screen
+        name="Buddy"
+        options={{
+          tabBarIcon: ({ focused }) => (
+            <Text style={[styles.tabIcon, focused && styles.tabIconActive]}>
+              👥
+            </Text>
+          ),
+        }}
+      >
+        {(props) => <BuddyScreen {...props} session={session} />}
       </Tab.Screen>
 
       <Tab.Screen

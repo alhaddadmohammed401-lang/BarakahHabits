@@ -280,3 +280,95 @@ export function useNotifications() {
     });
   }, []);
 }
+
+// ── Milestone Notifications ──────────────────────────────────────────────────
+
+const MILESTONE_STORAGE_KEY = "barakah_notified_milestones";
+
+interface MilestoneConfig {
+  days: number;
+  message: string;
+}
+
+/**
+ * The streak milestones and their corresponding notification messages.
+ */
+const MILESTONES: MilestoneConfig[] = [
+  { days: 3, message: "🌱 3 day streak! You're building Barakah!" },
+  { days: 7, message: "🔥 1 week streak! SubhanAllah, keep going!" },
+  { days: 14, message: "⚡ 2 weeks strong! Allah loves consistency!" },
+  { days: 30, message: "🏆 30 days! MashaAllah — you're unstoppable!" },
+  { days: 60, message: "💎 60 day streak! Your deen is your superpower!" },
+  { days: 100, message: "👑 100 DAYS! You are an inspiration to the Ummah!" },
+];
+
+/**
+ * Loads the set of milestone day-counts that have already triggered a notification.
+ * Returns a Set of numbers representing previously notified milestones.
+ */
+async function getNotifiedMilestones(): Promise<Set<number>> {
+  try {
+    const stored = await AsyncStorage.getItem(MILESTONE_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      return new Set(Array.isArray(parsed) ? parsed : []);
+    }
+  } catch {
+    // ignore
+  }
+  return new Set();
+}
+
+/**
+ * Persists the updated set of notified milestones to AsyncStorage.
+ */
+async function saveNotifiedMilestones(milestones: Set<number>): Promise<void> {
+  try {
+    await AsyncStorage.setItem(
+      MILESTONE_STORAGE_KEY,
+      JSON.stringify(Array.from(milestones))
+    );
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Checks whether the current streak has hit a new milestone.
+ * If so, sends a local push notification and records it so it only fires once.
+ * Called from HomeScreen after all 5 daily habits are completed.
+ */
+export async function checkMilestoneNotification(
+  currentStreak: number
+): Promise<void> {
+  const notified = await getNotifiedMilestones();
+
+  for (const milestone of MILESTONES) {
+    // Fire notification only when streak exactly reaches or newly crosses a milestone
+    if (currentStreak >= milestone.days && !notified.has(milestone.days)) {
+      try {
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: "Barakah Habits 🌟",
+            body: milestone.message,
+            sound: "default",
+            ...(Platform.OS === "android" && {
+              channelId: "prayer-times",
+            }),
+          },
+          trigger: null, // Fire immediately
+        });
+
+        console.log(
+          `[Milestone] ✅ Notified for ${milestone.days}-day streak`
+        );
+
+        notified.add(milestone.days);
+      } catch (e) {
+        console.error(`[Milestone] Failed to send notification:`, e);
+      }
+    }
+  }
+
+  await saveNotifiedMilestones(notified);
+}
