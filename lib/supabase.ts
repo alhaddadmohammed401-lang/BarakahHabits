@@ -32,10 +32,20 @@ export interface BadgeProgress {
   progressText: string;
 }
 
+export interface HabitHeatmapDay {
+  date: string;
+  completionCount: number;
+}
+
 interface HabitCompletionRow {
   habit_id: number;
   completed_date: string;
   created_at: string | null;
+}
+
+interface HabitHeatmapRow {
+  habit_id: number;
+  completed_date: string;
 }
 
 interface QazaPrayerRow {
@@ -44,6 +54,7 @@ interface QazaPrayerRow {
 }
 
 const HABITS_PER_DAY = 5;
+const HEATMAP_DAY_COUNT = 365;
 const HABIT_IDS = {
   fajrOnTime: 1,
   quranReading: 3,
@@ -515,4 +526,60 @@ export async function getBadgeProgress(userId: string): Promise<BadgeProgress[]>
       progressText: `${totalQazaOwed} qaza left`,
     }),
   ];
+}
+
+/**
+ * Builds the fixed 365-day heatmap date list ending today.
+ */
+function buildHeatmapDateRange(): string[] {
+  const endDate = getTodayKey();
+  const startDate = addDays(endDate, -(HEATMAP_DAY_COUNT - 1));
+  const dates: string[] = [];
+
+  for (let dayIndex = 0; dayIndex < HEATMAP_DAY_COUNT; dayIndex++) {
+    dates.push(addDays(startDate, dayIndex));
+  }
+
+  return dates;
+}
+
+/**
+ * Loads one year of habit completion counts for the profile heatmap.
+ */
+export async function getHabitCompletionHeatmap(
+  userId: string
+): Promise<HabitHeatmapDay[]> {
+  const dates = buildHeatmapDateRange();
+  const startDate = dates[0];
+  const endDate = dates[dates.length - 1];
+
+  const { data, error } = await supabase
+    .from("habit_completions")
+    .select("habit_id, completed_date")
+    .eq("user_id", userId)
+    .gte("completed_date", startDate)
+    .lte("completed_date", endDate);
+
+  if (error) {
+    throw new Error(`Could not load yearly habit data: ${error.message}`);
+  }
+
+  const completionsByDate: Record<string, Set<number>> = {};
+  const rows = (data ?? []) as HabitHeatmapRow[];
+
+  rows.forEach((row) => {
+    const dateKey = getDateKey(row.completed_date);
+    if (!dateKey) return;
+
+    if (!completionsByDate[dateKey]) {
+      completionsByDate[dateKey] = new Set<number>();
+    }
+
+    completionsByDate[dateKey].add(row.habit_id);
+  });
+
+  return dates.map((date) => ({
+    date,
+    completionCount: completionsByDate[date]?.size ?? 0,
+  }));
 }

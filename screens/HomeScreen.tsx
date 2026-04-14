@@ -38,6 +38,18 @@ const DEFAULT_HABITS: Habit[] = [
 // ── Storage Keys (for habit cache fallback only) ─────────────────────────────
 const CACHE_KEY = "barakah_today_habits";
 
+// ── Haid Exemption Mode Keys ─────────────────────────────────────────────────
+const HAID_MODE_KEY = "barakah_haid_mode_active";
+const HAID_START_DATE_KEY = "barakah_haid_start_date";
+const HAID_HABITS_CACHE_KEY = "barakah_haid_habits";
+
+// ── Haid Mode Alternative Habits ─────────────────────────────────────────────
+const HAID_HABITS: Habit[] = [
+  { id: 101, label: "Morning Dhikr", emoji: "🤲", completed: false },
+  { id: 102, label: "Evening Dua", emoji: "🌙", completed: false },
+  { id: 103, label: "Quran Listening", emoji: "🎧", completed: false },
+];
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function getFormattedDate(): string {
   const now = new Date();
@@ -61,8 +73,14 @@ export default function HomeScreen({ session }: Props) {
   const useSupabaseRef = useRef<boolean>(true);
   const syncingRef = useRef(false);
 
-  const completedCount = habits.filter((h) => h.completed).length;
-  const progress = completedCount / habits.length;
+  // ── Haid exemption mode state ──────────────────────────────────────────
+  const [haidModeActive, setHaidModeActive] = useState<boolean>(false);
+  const [haidHabits, setHaidHabits] = useState<Habit[]>(HAID_HABITS);
+
+  // Use haid habits when in haid mode, otherwise normal habits
+  const activeHabits = haidModeActive ? haidHabits : habits;
+  const completedCount = activeHabits.filter((h) => h.completed).length;
+  const progress = completedCount / activeHabits.length;
 
   // ── Load data on mount ─────────────────────────────────────────────────
   useEffect(() => {
@@ -71,60 +89,110 @@ export default function HomeScreen({ session }: Props) {
     async function loadData() {
       const today = getTodayKey();
 
-      // 1) Load today's completed habits from Supabase
-      let completedIds: number[] = [];
-      let supabaseWorked = false;
-
+      // ── Check haid exemption mode status ───────────────────────────────
+      let isHaidActive = false;
       try {
-        const { data, error } = await supabase
-          .from("habit_completions")
-          .select("habit_id")
-          .eq("user_id", userId)
-          .eq("completed_date", today);
-
-        if (!error && data) {
-          completedIds = data.map((row: { habit_id: number }) => row.habit_id);
-          supabaseWorked = true;
-
-          // Cache to AsyncStorage as fallback
-          AsyncStorage.setItem(
-            CACHE_KEY,
-            JSON.stringify({ date: today, ids: completedIds })
-          ).catch(() => {});
-        }
+        const haidStatus = await AsyncStorage.getItem(HAID_MODE_KEY);
+        isHaidActive = haidStatus === "true";
       } catch {
-        // Supabase unreachable
-      }
-
-      // 2) Fallback to AsyncStorage cache if Supabase failed
-      if (!supabaseWorked) {
-        useSupabaseRef.current = false;
-        try {
-          const cached = await AsyncStorage.getItem(CACHE_KEY);
-          if (cached) {
-            const parsed = JSON.parse(cached);
-            if (parsed.date === today && Array.isArray(parsed.ids)) {
-              completedIds = parsed.ids;
-            }
-          }
-        } catch {
-          // ignore
-        }
+        // ignore
       }
 
       if (cancelled) return;
+      setHaidModeActive(isHaidActive);
 
-      // 3) Apply completed states
-      const allDone = completedIds.length === DEFAULT_HABITS.length;
-      setHabits(
-        DEFAULT_HABITS.map((h) => ({
-          ...h,
-          completed: completedIds.includes(h.id),
-        }))
-      );
-      setTodayCompleted(allDone);
+      if (isHaidActive) {
+        // ── Haid mode: auto-complete normal habits to preserve streak ────
+        if (userId) {
+          try {
+            const upsertRows = DEFAULT_HABITS.map((h) => ({
+              user_id: userId,
+              habit_id: h.id,
+              completed_date: today,
+            }));
+            await supabase.from("habit_completions").upsert(upsertRows, {
+              onConflict: "user_id,habit_id,completed_date",
+            });
+          } catch {
+            // Streak protection failed — will retry next app open
+          }
+        }
 
-      // 4) Calculate streak from Supabase
+        if (cancelled) return;
+
+        // Mark all normal habits as completed in UI (streak protection)
+        setHabits(DEFAULT_HABITS.map((h) => ({ ...h, completed: true })));
+        setTodayCompleted(true);
+
+        // Load haid habit states from local cache
+        try {
+          const cached = await AsyncStorage.getItem(HAID_HABITS_CACHE_KEY);
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            if (parsed.date === today && Array.isArray(parsed.habits)) {
+              if (!cancelled) setHaidHabits(parsed.habits);
+            }
+          }
+        } catch {
+          // ignore — haid habits start fresh
+        }
+      } else {
+        // ── Normal mode: load habits from Supabase ───────────────────────
+        // 1) Load today's completed habits from Supabase
+        let completedIds: number[] = [];
+        let supabaseWorked = false;
+
+        try {
+          const { data, error } = await supabase
+            .from("habit_completions")
+            .select("habit_id")
+            .eq("user_id", userId)
+            .eq("completed_date", today);
+
+          if (!error && data) {
+            completedIds = data.map((row: { habit_id: number }) => row.habit_id);
+            supabaseWorked = true;
+
+            // Cache to AsyncStorage as fallback
+            AsyncStorage.setItem(
+              CACHE_KEY,
+              JSON.stringify({ date: today, ids: completedIds })
+            ).catch(() => {});
+          }
+        } catch {
+          // Supabase unreachable
+        }
+
+        // 2) Fallback to AsyncStorage cache if Supabase failed
+        if (!supabaseWorked) {
+          useSupabaseRef.current = false;
+          try {
+            const cached = await AsyncStorage.getItem(CACHE_KEY);
+            if (cached) {
+              const parsed = JSON.parse(cached);
+              if (parsed.date === today && Array.isArray(parsed.ids)) {
+                completedIds = parsed.ids;
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        if (cancelled) return;
+
+        // 3) Apply completed states
+        const allDone = completedIds.length === DEFAULT_HABITS.length;
+        setHabits(
+          DEFAULT_HABITS.map((h) => ({
+            ...h,
+            completed: completedIds.includes(h.id),
+          }))
+        );
+        setTodayCompleted(allDone);
+      }
+
+      // ── Calculate streak from Supabase (both modes) ────────────────────
       if (userId) {
         try {
           const streakResult = await calculateStreaks(userId);
@@ -195,6 +263,94 @@ export default function HomeScreen({ session }: Props) {
     } catch {
       // ignore
     }
+  }
+
+  // ── Toggle a haid habit (saved locally only, not synced) ───────────────
+  function toggleHaidHabit(id: number) {
+    const next = haidHabits.map((h) =>
+      h.id === id ? { ...h, completed: !h.completed } : h
+    );
+    setHaidHabits(next);
+
+    // Save to AsyncStorage only — not synced to Supabase
+    const today = getTodayKey();
+    AsyncStorage.setItem(
+      HAID_HABITS_CACHE_KEY,
+      JSON.stringify({ date: today, habits: next })
+    ).catch(() => {});
+  }
+
+  // ── Activate haid exemption mode (pauses streak tracking) ──────────────
+  function activateHaidMode() {
+    Alert.alert(
+      "Pause Streak",
+      "Your streak will be safely preserved. You'll see alternative spiritual practices to continue your journey.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Pause",
+          onPress: async () => {
+            const today = getTodayKey();
+
+            // Store haid mode state in AsyncStorage
+            await AsyncStorage.setItem(HAID_MODE_KEY, "true");
+            await AsyncStorage.setItem(HAID_START_DATE_KEY, today);
+
+            setHaidModeActive(true);
+            setHaidHabits(HAID_HABITS.map((h) => ({ ...h, completed: false })));
+
+            // Auto-complete all normal habits for today to preserve streak
+            if (userId) {
+              try {
+                const upsertRows = DEFAULT_HABITS.map((h) => ({
+                  user_id: userId,
+                  habit_id: h.id,
+                  completed_date: today,
+                }));
+                await supabase.from("habit_completions").upsert(upsertRows, {
+                  onConflict: "user_id,habit_id,completed_date",
+                });
+              } catch {
+                // Best-effort streak protection
+              }
+            }
+
+            // Update UI to show all normal habits as completed
+            setHabits(DEFAULT_HABITS.map((h) => ({ ...h, completed: true })));
+            setTodayCompleted(true);
+
+            // Refresh streak to reflect auto-completion
+            await refreshStreak();
+          },
+        },
+      ]
+    );
+  }
+
+  // ── Deactivate haid exemption mode (resumes normal habits) ─────────────
+  function deactivateHaidMode() {
+    Alert.alert(
+      "Resume Habits",
+      "Welcome back! Your streak has been preserved.",
+      [
+        { text: "Not Yet", style: "cancel" },
+        {
+          text: "Resume",
+          onPress: async () => {
+            // Clear haid mode state from AsyncStorage
+            await AsyncStorage.removeItem(HAID_MODE_KEY);
+            await AsyncStorage.removeItem(HAID_START_DATE_KEY);
+            await AsyncStorage.removeItem(HAID_HABITS_CACHE_KEY);
+
+            setHaidModeActive(false);
+            setHaidHabits(HAID_HABITS.map((h) => ({ ...h, completed: false })));
+
+            // Normal habits were auto-completed during haid mode,
+            // so they stay completed for today. Tomorrow starts fresh.
+          },
+        },
+      ]
+    );
   }
 
   // ── Toggle a habit & check if all 5 are done ───────────────────────────
@@ -271,6 +427,15 @@ export default function HomeScreen({ session }: Props) {
           <Text style={styles.date}>{getFormattedDate()}</Text>
         </View>
 
+        {/* ── Haid Mode Banner (gentle, non-intrusive) ─────── */}
+        {haidModeActive && (
+          <View style={styles.haidBanner}>
+            <Text style={styles.haidBannerText}>
+              Streak paused — Focus on Dhikr and Dua 🤲
+            </Text>
+          </View>
+        )}
+
         {/* ── Progress Ring ────────────────────────────────── */}
         <View style={styles.progressCard}>
           <View style={styles.progressCircleOuter}>
@@ -281,7 +446,7 @@ export default function HomeScreen({ session }: Props) {
               ]}
             >
               <Text style={styles.progressText}>
-                {completedCount}/{habits.length}
+                {completedCount}/{activeHabits.length}
               </Text>
               <Text style={styles.progressLabel}>Done</Text>
             </View>
@@ -296,13 +461,19 @@ export default function HomeScreen({ session }: Props) {
         </View>
 
         {/* ── Habit List ───────────────────────────────────── */}
-        <Text style={styles.sectionTitle}>Today's Habits</Text>
+        <Text style={styles.sectionTitle}>
+          {haidModeActive ? "Spiritual Practices" : "Today's Habits"}
+        </Text>
 
-        {habits.map((habit) => (
+        {activeHabits.map((habit) => (
           <TouchableOpacity
             key={habit.id}
             activeOpacity={0.7}
-            onPress={() => toggleHabit(habit.id)}
+            onPress={() =>
+              haidModeActive
+                ? toggleHaidHabit(habit.id)
+                : toggleHabit(habit.id)
+            }
             style={[
               styles.habitCard,
               habit.completed && styles.habitCardCompleted,
@@ -338,7 +509,7 @@ export default function HomeScreen({ session }: Props) {
           </View>
         )}
 
-        {!useSupabaseRef.current && loaded && (
+        {!useSupabaseRef.current && loaded && !haidModeActive && (
           <View style={styles.offlineRow}>
             <Text style={styles.offlineText}>
               ☁️ Offline mode — data saved locally
@@ -359,6 +530,28 @@ export default function HomeScreen({ session }: Props) {
               : `${streak} day${streak > 1 ? "s" : ""} of consistency!`}
           </Text>
         </View>
+
+        {/* ── Haid Mode Resume Button ─────────────────────── */}
+        {haidModeActive && (
+          <TouchableOpacity
+            onPress={deactivateHaidMode}
+            style={styles.haidResumeButton}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.haidResumeText}>Resume normal habits</Text>
+          </TouchableOpacity>
+        )}
+
+        {/* ── Pause Streak Link (subtle, bottom of screen) ── */}
+        {!haidModeActive && (
+          <TouchableOpacity
+            onPress={activateHaidMode}
+            style={styles.haidPauseLink}
+            activeOpacity={0.5}
+          >
+            <Text style={styles.haidPauseLinkText}>Pause streak</Text>
+          </TouchableOpacity>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -418,6 +611,25 @@ const styles = StyleSheet.create({
     color: COLORS.textMuted,
     marginTop: 6,
     letterSpacing: 0.3,
+  },
+
+  // ── Haid Mode Banner ────────────
+  haidBanner: {
+    backgroundColor: "rgba(212, 160, 23, 0.08)",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(212, 160, 23, 0.18)",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    marginBottom: 20,
+    alignItems: "center",
+  },
+  haidBannerText: {
+    fontSize: 14,
+    color: COLORS.gold,
+    fontStyle: "italic",
+    textAlign: "center",
+    lineHeight: 20,
   },
 
   // ── Progress ────────────────────
@@ -592,5 +804,33 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: COLORS.textMuted,
     textAlign: "right",
+  },
+
+  // ── Haid Mode Resume Button ─────
+  haidResumeButton: {
+    alignItems: "center",
+    paddingVertical: 14,
+    marginTop: 16,
+    backgroundColor: "rgba(212, 160, 23, 0.08)",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(212, 160, 23, 0.15)",
+  },
+  haidResumeText: {
+    fontSize: 14,
+    color: COLORS.gold,
+    fontWeight: "500",
+  },
+
+  // ── Haid Pause Link (subtle) ────
+  haidPauseLink: {
+    alignItems: "center",
+    paddingVertical: 20,
+    marginTop: 8,
+  },
+  haidPauseLinkText: {
+    fontSize: 12,
+    color: COLORS.textMuted,
+    opacity: 0.5,
   },
 });

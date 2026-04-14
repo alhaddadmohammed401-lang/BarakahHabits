@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -11,7 +11,13 @@ import {
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Session } from "@supabase/supabase-js";
-import { supabase, calculateStreaks, StreakResult } from "../lib/supabase";
+import {
+  supabase,
+  calculateStreaks,
+  getHabitCompletionHeatmap,
+  HabitHeatmapDay,
+  StreakResult,
+} from "../lib/supabase";
 import { useRevenueCat } from "../hooks/useRevenueCat";
 import RevenueCatUI from "react-native-purchases-ui";
 
@@ -19,6 +25,100 @@ import RevenueCatUI from "react-native-purchases-ui";
 interface Props {
   session: Session;
   navigation: any;
+}
+
+interface HeatmapColumn {
+  columnKey: string;
+  days: HabitHeatmapDay[];
+}
+
+interface MonthLabelSection {
+  monthLabel: string;
+  columnCount: number;
+}
+
+const HEATMAP_SQUARE_SIZE = 10;
+const HEATMAP_SQUARE_GAP = 3;
+const HEATMAP_COLUMN_WIDTH = HEATMAP_SQUARE_SIZE + HEATMAP_SQUARE_GAP;
+const MONTH_LABELS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+/**
+ * Splits 365 heatmap days into vertical week-like columns from oldest to newest.
+ */
+function buildHeatmapColumns(days: HabitHeatmapDay[]): HeatmapColumn[] {
+  const columns: HeatmapColumn[] = [];
+  const orderedDays = [...days].sort((firstDay, secondDay) =>
+    firstDay.date.localeCompare(secondDay.date)
+  );
+
+  for (let startIndex = 0; startIndex < orderedDays.length; startIndex += 7) {
+    columns.push({
+      columnKey: orderedDays[startIndex].date,
+      days: orderedDays.slice(startIndex, startIndex + 7),
+    });
+  }
+
+  return columns;
+}
+
+/**
+ * Reads the month number from a YYYY-MM-DD date key.
+ */
+function getMonthIndex(dateKey: string): number {
+  const parsedDate = new Date(`${dateKey}T00:00:00`);
+  return parsedDate.getMonth();
+}
+
+/**
+ * Groups adjacent heatmap columns by month for the label row.
+ */
+function buildMonthLabelSections(
+  columns: HeatmapColumn[]
+): MonthLabelSection[] {
+  const sections: MonthLabelSection[] = [];
+
+  columns.forEach((column) => {
+    const monthLabel = MONTH_LABELS[getMonthIndex(column.columnKey)];
+    const previousSection = sections[sections.length - 1];
+
+    if (previousSection?.monthLabel === monthLabel) {
+      previousSection.columnCount++;
+    } else {
+      sections.push({ monthLabel, columnCount: 1 });
+    }
+  });
+
+  return sections;
+}
+
+/**
+ * Chooses the heatmap color level for a day's completion count.
+ */
+function getHeatmapSquareStyle(completionCount: number) {
+  if (completionCount >= 5) return styles.heatmapFull;
+  if (completionCount >= 3) return styles.heatmapMedium;
+  if (completionCount >= 1) return styles.heatmapLight;
+  return styles.heatmapEmpty;
+}
+
+/**
+ * Builds a screen-reader label for one heatmap square.
+ */
+function getHeatmapSquareLabel(day: HabitHeatmapDay): string {
+  return `${day.date}: ${day.completionCount} of 5 habits completed`;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -32,35 +132,69 @@ export default function ProfileScreen({ session, navigation }: Props) {
     bestStreak: 0,
     totalCompleted: 0,
   });
+  const [heatmapDays, setHeatmapDays] = useState<HabitHeatmapDay[]>([]);
+  const [heatmapLoading, setHeatmapLoading] = useState<boolean>(true);
+  const [heatmapError, setHeatmapError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  const heatmapColumns = buildHeatmapColumns(heatmapDays);
+  const monthLabelSections = buildMonthLabelSections(heatmapColumns);
+  const heatmapScrollRef = useRef<ScrollView>(null);
 
   // ── Load stats on mount ────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
 
-    async function loadStats() {
+    async function loadProfileData() {
       if (!userId) {
         setLoading(false);
+        setHeatmapLoading(false);
         return;
       }
 
-      try {
-        const result = await calculateStreaks(userId);
-        if (!cancelled) {
-          setStats(result);
-        }
-      } catch {
-        // Supabase unavailable — stats stay at 0
+      setLoading(true);
+      setHeatmapLoading(true);
+      setHeatmapError(null);
+
+      const [statsResult, heatmapResult] = await Promise.allSettled([
+        calculateStreaks(userId),
+        getHabitCompletionHeatmap(userId),
+      ]);
+
+      if (cancelled) return;
+
+      if (statsResult.status === "fulfilled") {
+        setStats(statsResult.value);
       }
 
-      if (!cancelled) setLoading(false);
+      if (heatmapResult.status === "fulfilled") {
+        setHeatmapDays(heatmapResult.value);
+      } else {
+        const message =
+          heatmapResult.reason instanceof Error
+            ? heatmapResult.reason.message
+            : "Could not load yearly habit data.";
+        setHeatmapError(message);
+      }
+
+      setLoading(false);
+      setHeatmapLoading(false);
+
     }
 
-    loadStats();
+    loadProfileData();
     return () => {
       cancelled = true;
     };
   }, [userId]);
+
+  // ── Auto-scroll heatmap to show today (rightmost) ─────────────────────
+  useEffect(() => {
+    if (!heatmapLoading && heatmapDays.length > 0) {
+      setTimeout(() => {
+        heatmapScrollRef.current?.scrollToEnd({ animated: false });
+      }, 100);
+    }
+  }, [heatmapLoading, heatmapDays]);
 
   // ── Logout ─────────────────────────────────────────────────────────────
   function handleLogout() {
@@ -152,7 +286,81 @@ export default function ProfileScreen({ session, navigation }: Props) {
           </View>
         )}
 
-        {/* ── Motivational Quote ──────────────────────────── */}
+        {/* Yearly habit heatmap */}
+        <View style={styles.yearReviewSection}>
+          <Text style={styles.yearReviewTitle}>Your Year in Review</Text>
+          <Text style={styles.yearReviewSubtitle}>Last 365 days</Text>
+
+          {heatmapLoading ? (
+            <View style={styles.heatmapLoadingBox}>
+              <ActivityIndicator size="small" color={COLORS.gold} />
+              <Text style={styles.loadingText}>Loading your year...</Text>
+            </View>
+          ) : heatmapError ? (
+            <View style={styles.heatmapErrorBox}>
+              <Text style={styles.heatmapErrorText}>{heatmapError}</Text>
+            </View>
+          ) : (
+            <>
+              <ScrollView
+                ref={heatmapScrollRef}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.heatmapScroll}
+                contentContainerStyle={styles.heatmapScrollContent}
+              >
+                <View>
+                  <View style={[styles.monthLabelRow, styles.ltrHeatmapRow]}>
+                    {monthLabelSections.map((section, sectionIndex) => (
+                      <View
+                        key={`${section.monthLabel}-${sectionIndex}`}
+                        style={[
+                          styles.monthLabelSection,
+                          {
+                            width:
+                              section.columnCount * HEATMAP_COLUMN_WIDTH,
+                          },
+                        ]}
+                      >
+                        <Text style={styles.monthLabel}>
+                          {section.monthLabel}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+
+                  <View style={[styles.heatmapGrid, styles.ltrHeatmapRow]}>
+                    {heatmapColumns.map((column) => (
+                      <View key={column.columnKey} style={styles.heatmapColumn}>
+                        {column.days.map((day) => (
+                          <View
+                            key={day.date}
+                            accessibilityLabel={getHeatmapSquareLabel(day)}
+                            style={[
+                              styles.heatmapSquare,
+                              getHeatmapSquareStyle(day.completionCount),
+                            ]}
+                          />
+                        ))}
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              </ScrollView>
+
+              <View style={styles.heatmapLegend}>
+                <Text style={styles.legendText}>Empty → Partial → Full</Text>
+                <View style={styles.legendSquares}>
+                  <View style={[styles.legendSquare, styles.heatmapEmpty]} />
+                  <View style={[styles.legendSquare, styles.heatmapLight]} />
+                  <View style={[styles.legendSquare, styles.heatmapMedium]} />
+                  <View style={[styles.legendSquare, styles.heatmapFull]} />
+                </View>
+              </View>
+            </>
+          )}
+        </View>
+
         <View style={styles.quoteCard}>
           <Text style={styles.quoteText}>
             "The most beloved deeds to Allah are the most consistent, even if
@@ -203,6 +411,11 @@ const COLORS = {
   textMuted: "rgba(255,255,255,0.6)",
   cardBg: "rgba(255,255,255,0.08)",
   cardBorder: "rgba(255,255,255,0.1)",
+  goldSoft: "rgba(212, 160, 23, 0.3)",
+  goldMedium: "rgba(212, 160, 23, 0.6)",
+  heatmapBorder: "rgba(255,255,255,0.16)",
+  heatmapEmptyBorder: "rgba(212, 160, 23, 0.28)",
+  errorBg: "rgba(0,0,0,0.22)",
 };
 
 const styles = StyleSheet.create({
@@ -345,7 +558,121 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
 
-  // ── Quote Card ──────────────────
+  // Year Review Heatmap
+  yearReviewSection: {
+    backgroundColor: COLORS.cardBg,
+    borderColor: COLORS.cardBorder,
+    borderRadius: 16,
+    borderWidth: 1,
+    direction: "ltr",
+    marginBottom: 24,
+    padding: 16,
+  },
+  yearReviewTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: COLORS.gold,
+    marginBottom: 4,
+  },
+  yearReviewSubtitle: {
+    color: COLORS.textMuted,
+    fontSize: 12,
+    fontWeight: "600",
+    marginBottom: 14,
+  },
+  heatmapLoadingBox: {
+    alignItems: "center",
+    backgroundColor: COLORS.cardBg,
+    borderColor: COLORS.cardBorder,
+    borderRadius: 16,
+    borderWidth: 1,
+    paddingVertical: 22,
+  },
+  heatmapErrorBox: {
+    backgroundColor: COLORS.errorBg,
+    borderColor: COLORS.cardBorder,
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 16,
+  },
+  heatmapErrorText: {
+    color: COLORS.textMuted,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  heatmapScroll: {
+    direction: "ltr",
+    marginBottom: 14,
+    minHeight: 112,
+  },
+  heatmapScrollContent: {
+    direction: "ltr",
+    paddingRight: 18,
+  },
+  ltrHeatmapRow: {
+    direction: "ltr",
+  },
+  monthLabelRow: {
+    flexDirection: "row",
+    marginBottom: 8,
+  },
+  monthLabelSection: {
+    height: 16,
+  },
+  monthLabel: {
+    color: COLORS.textMuted,
+    fontSize: 10,
+    fontWeight: "600",
+  },
+  heatmapGrid: {
+    flexDirection: "row",
+  },
+  heatmapColumn: {
+    marginRight: HEATMAP_SQUARE_GAP,
+  },
+  heatmapSquare: {
+    width: HEATMAP_SQUARE_SIZE,
+    height: HEATMAP_SQUARE_SIZE,
+    borderRadius: 2,
+    borderWidth: 1,
+    borderColor: COLORS.heatmapBorder,
+    marginBottom: HEATMAP_SQUARE_GAP,
+  },
+  heatmapEmpty: {
+    backgroundColor: COLORS.primary,
+    borderColor: COLORS.heatmapEmptyBorder,
+  },
+  heatmapLight: {
+    backgroundColor: COLORS.goldSoft,
+  },
+  heatmapMedium: {
+    backgroundColor: COLORS.goldMedium,
+  },
+  heatmapFull: {
+    backgroundColor: COLORS.gold,
+  },
+  heatmapLegend: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  legendText: {
+    color: COLORS.textMuted,
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  legendSquares: {
+    flexDirection: "row",
+  },
+  legendSquare: {
+    width: 12,
+    height: 12,
+    borderRadius: 2,
+    borderWidth: 1,
+    borderColor: COLORS.heatmapBorder,
+    marginLeft: 5,
+  },
+
   quoteCard: {
     backgroundColor: COLORS.goldLight,
     borderRadius: 16,
